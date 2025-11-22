@@ -7,6 +7,14 @@
       "os": "linux",
       "sha256": "5443b098cfa81e3a265a6692062701cc0465fe55c60027aabb99de44a8878bb8",
       "size_bytes": 72174203
+    },
+    {
+      "version": "8.2.2",
+      "url": "https://github.com/NicolasTeles-Dev/phx-binaries/releases/download/php-8.2.2/php-8.2.2-linux-x64.tar.gz",
+      "arch": "x64",
+      "os": "linux",
+      "sha256": "d276796f280988adbc560b354ad54487b4ffd77b91229a743642ada9f80ef8e5",
+      "size_bytes": 70288696
     }
   ]
 }
