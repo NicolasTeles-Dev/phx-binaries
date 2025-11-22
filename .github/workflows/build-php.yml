@@ -95,7 +95,13 @@ jobs:
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz,artifact.meta
+          tag_name: php-${{ github.event.inputs.php_version }}
+          name: "PHP ${{ github.event.inputs.php_version }}"
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz
+            artifact.meta
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
