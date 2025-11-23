@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       php_version:
-        description: "PHP version (e.g. 8.3.2)"
+        description: "PHP version (e.g. 7.4.4 or 8.3.2)"
         required: true
         type: string
 
 permissions:
-  contents: write  # necessário para commitar e criar release
+  contents: write
 
 jobs:
   build:
@@ -20,35 +20,55 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
 
+      # -------------------------------------------------------------------
+      # OpenSSL 1.1 para permitir compilar PHP 7.x, 5.x e versões antigas
+      # -------------------------------------------------------------------
+      - name: Install OpenSSL 1.1
+        run: |
+          sudo add-apt-repository ppa:rael-gc/openssl1.1 -y
+          sudo apt update -y
+          sudo apt install -y openssl1.1 libssl1.1 libssl-dev
+
+      # -------------------------------------------------------------------
+      # Dependências de build
+      # -------------------------------------------------------------------
       - name: Install build deps
         run: |
-          sudo apt update -y
           sudo apt install -y build-essential autoconf bison re2c pkg-config \
             libxml2-dev libsqlite3-dev libcurl4-openssl-dev libzip-dev \
-            libonig-dev libssl-dev libreadline-dev libjpeg-dev libpng-dev \
+            libonig-dev libreadline-dev libjpeg-dev libpng-dev \
             libwebp-dev libfreetype6-dev libxslt1-dev libicu-dev wget tar jq
 
+      # -------------------------------------------------------------------
+      # Baixa o código-fonte
+      # -------------------------------------------------------------------
       - name: Download PHP source
         run: |
           VERSION=${{ github.event.inputs.php_version }}
           SRC="https://www.php.net/distributions/php-${VERSION}.tar.gz"
-          wget -q "$SRC" -O php-${VERSION}.tar.gz
+          wget -q "$SRC" -O php-${VERSION}.tar.gz || exit 1
           tar -xzf php-${VERSION}.tar.gz
           mv php-${VERSION} php-src
 
+      # -------------------------------------------------------------------
+      # Configuração com OpenSSL 1.1
+      # -------------------------------------------------------------------
       - name: Configure PHP
         working-directory: php-src
         run: |
           VERSION=${{ github.event.inputs.php_version }}
+
+          export OPENSSL_CFLAGS="-I/usr/include/openssl1.1"
+          export OPENSSL_LIBS="-L/usr/lib/openssl1.1 -lssl -lcrypto"
+
           ./buildconf --force || true
+
           ./configure \
             --prefix=/opt/php/${VERSION} \
             --enable-cli \
             --enable-mbstring \
-            --with-openssl \
+            --with-openssl=/usr/lib/openssl1.1 \
             --with-curl \
             --with-zlib \
             --enable-pcntl \
@@ -65,81 +85,88 @@ jobs:
             --with-webp \
             --with-freetype
 
+      # -------------------------------------------------------------------
+      # Compila e instala
+      # -------------------------------------------------------------------
       - name: Build and install
         working-directory: php-src
         run: |
           make -j$(nproc)
-          sudo make install DESTDIR=/opt/php-tmp || sudo make install
+          sudo make install
 
+      # -------------------------------------------------------------------
+      # Cria arquivo .tar.gz para envio ao PHX
+      # -------------------------------------------------------------------
       - name: Package build
         run: |
           VERSION=${{ github.event.inputs.php_version }}
           mkdir -p artifacts
-          # Se a instalação foi feita em /opt/php/<VERSION>:
-          if [ -d "/opt/php/${VERSION}" ]; then
-            cd /opt/php
-            tar -czf "${GITHUB_WORKSPACE}/artifacts/php-${VERSION}-linux-x64.tar.gz" "${VERSION}"
-          else
-            # fallback: a instalação pode ter sido feita no prefix direto, procurar bin/php
-            sudo find / -type f -path "*/php" -name "php" -print 2>/dev/null | head -n 1 | xargs -I{} dirname {} | xargs -I{} sudo tar -czf "${GITHUB_WORKSPACE}/artifacts/php-${VERSION}-linux-x64.tar.gz" -C {} .
-          fi
+          cd /opt/php
+          tar -czf "${GITHUB_WORKSPACE}/artifacts/php-${VERSION}-linux-x64.tar.gz" "${VERSION}"
 
+      # -------------------------------------------------------------------
+      # SHA256 + tamanho do arquivo
+      # -------------------------------------------------------------------
       - name: Compute checksum and size
         run: |
           ART=artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz
-          SHA=$(sha256sum "$ART" | awk '{print $1}')
-          SIZE=$(stat -c%s "$ART")
-          echo "sha256=$SHA" > artifact.meta
-          echo "size=$SIZE" >> artifact.meta
+          echo "sha256=$(sha256sum $ART | awk '{print $1}')" > artifact.meta
+          echo "size=$(stat -c%s $ART)" >> artifact.meta
 
+      # -------------------------------------------------------------------
+      # Cria release + envia asset
+      # -------------------------------------------------------------------
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v1
         with:
           tag_name: php-${{ github.event.inputs.php_version }}
           name: "PHP ${{ github.event.inputs.php_version }}"
-          draft: false
-          prerelease: false
           files: |
             artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz
             artifact.meta
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # -------------------------------------------------------------------
+      # Atualiza versions.json para o seu gerenciador PHX
+      # -------------------------------------------------------------------
       - name: Get release download URL and update versions.json
         id: updatejson
         run: |
           VERSION=${{ github.event.inputs.php_version }}
-          OWNER_REPO="${REPO}"
-          # Construct URL to asset (softprops uses tag name same as ref used for release)
           TAG="php-${VERSION}"
-          ASSET_NAME="php-${VERSION}-linux-x64.tar.gz"
-          DOWNLOAD_URL="https://github.com/${OWNER_REPO}/releases/download/${TAG}/${ASSET_NAME}"
-          SHA=$(cat artifact.meta | grep sha256 | cut -d'=' -f2)
-          SIZE=$(cat artifact.meta | grep size | cut -d'=' -f2)
+          ASSET="php-${VERSION}-linux-x64.tar.gz"
+          URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
 
-          # Backup versions.json
+          SHA=$(grep sha256 artifact.meta | cut -d= -f2)
+          SIZE=$(grep size artifact.meta | cut -d= -f2)
+
           cp versions.json versions.json.bak || true
 
-          # If versions array doesn't exist, create it
-          if ! jq .versions versions.json >/dev/null 2>&1; then
-            jq -n '{"versions": []}' > versions.json
-          fi
+          jq -n --arg v "$VERSION" --arg u "$URL" --arg s "$SHA" --arg sz "$SIZE" '
+            {
+              versions: [
+                {
+                  version: $v,
+                  url: $u,
+                  arch: "x64",
+                  os: "linux",
+                  sha256: $s,
+                  size_bytes: ($sz|tonumber)
+                }
+              ]
+            }
+          ' > versions.tmp.json
 
-          # Remove any existing entry for this version
-          jq --arg v "$VERSION" ' .versions |= map(select(.version != $v)) ' versions.json > versions.tmp.json
+          mv versions.tmp.json versions.json
 
-          # Add new entry
-          jq --arg v "$VERSION" --arg u "$DOWNLOAD_URL" --arg s "$SHA" --arg si "$SIZE" \
-            '.versions += [{ "version": $v, "url": $u, "arch":"x64", "os":"linux", "sha256":$s, "size_bytes": ($si|tonumber) }]' \
-            versions.tmp.json > versions.json
-
-          rm -f versions.tmp.json || true
-          cat versions.json
-
+      # -------------------------------------------------------------------
+      # Commit final
+      # -------------------------------------------------------------------
       - name: Commit updated versions.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add versions.json
-          git commit -m "Add PHP ${{ github.event.inputs.php_version }} to versions.json" || echo "No changes to commit"
-          git push
+          git commit -m "Add PHP ${{ github.event.inputs.php_version }} to versions.json" || true
+          git push || true
