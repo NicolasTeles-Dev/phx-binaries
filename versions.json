@@ -1,6 +1,6 @@
 {
   "versions": [
-      {
+    {
       "version": "8.3.2",
       "url": "https://github.com/NicolasTeles-Dev/phx-binaries/releases/download/php-8.3.2/php-8.3.2-linux-x64.tar.gz",
       "arch": "x64",
@@ -31,6 +31,14 @@
       "os": "linux",
       "sha256": "a3088397f58a9aca0a712d79225522469c8ad7edbf0c6532f8eeff0092ad75a0",
       "size_bytes": 65716665
+    },
+    {
+      "version": "8.4.14",
+      "url": "https://github.com/NicolasTeles-Dev/phx-binaries/releases/download/php-8.4.14/php-8.4.14-linux-x64.tar.gz",
+      "arch": "x64",
+      "os": "linux",
+      "sha256": "eeb305c7d563e20d243e35dda6f205afe91ab02f11c6cfeefb6eb220b3d8d139",
+      "size_bytes": 84655628
     }
   ]
 }
