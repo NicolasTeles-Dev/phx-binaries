@@ -137,7 +137,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # -------------------------------------------------------------------
-      # Atualiza versions.json para o PHX
+      # Atualiza versions.json sem sobrescrever
       # -------------------------------------------------------------------
       - name: Update versions.json
         run: |
@@ -149,20 +149,28 @@ jobs:
           SHA=$(grep sha256 artifact.meta | cut -d= -f2)
           SIZE=$(grep size artifact.meta | cut -d= -f2)
 
-          jq -n --arg v "$VERSION" --arg u "$URL" --arg s "$SHA" --arg sz "$SIZE" '
-            {
-              versions: [
-                {
-                  version: $v,
-                  url: $u,
-                  arch: "x64",
-                  os: "linux",
-                  sha256: $s,
-                  size_bytes: ($sz|tonumber)
-                }
-              ]
-            }
-          ' > versions.json
+          # Se não existir versions.json, cria um vazio
+          if [ ! -f versions.json ]; then
+            echo '{"versions":[]}' > versions.json
+          fi
+
+          # Adiciona o novo item ao array existente
+          jq \
+            --arg v "$VERSION" \
+            --arg u "$URL" \
+            --arg s "$SHA" \
+            --arg sz "$SIZE" \
+            '.versions += [{
+                version: $v,
+                url: $u,
+                arch: "x64",
+                os: "linux",
+                sha256: $s,
+                size_bytes: ($sz|tonumber)
+            }]' \
+            versions.json > versions.tmp
+
+          mv versions.tmp versions.json
 
       # -------------------------------------------------------------------
       # Commit final do versions.json
