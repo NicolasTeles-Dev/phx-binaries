@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       php_version:
-        description: "PHP version (e.g. 5.6.40, 7.4.33, 8.1.27, 8.3.2)"
+        description: "PHP version (ex: 7.4.33, 8.0.3, 8.1.27, 8.3.2)"
         required: true
         type: string
 
@@ -13,7 +13,9 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # usa ubuntu-20.04 para qualquer 7.x ou para 8.0.0/8.0.1/8.0.2; caso contrário ubuntu-latest
+    runs-on: ${{ (startsWith(github.event.inputs.php_version, '7.') || contains('8.0.0 8.0.1 8.0.2', github.event.inputs.php_version)) && 'ubuntu-20.04' || 'ubuntu-latest' }}
+
     env:
       REPO: ${{ github.repository }}
 
@@ -21,25 +23,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # -------------------------------------------------------------------
-      # OpenSSL 1.1 universal (compila manual)
-      # -------------------------------------------------------------------
       - name: Install OpenSSL 1.1 manually
         run: |
           wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
           tar -xzf openssl-1.1.1w.tar.gz
           cd openssl-1.1.1w
-
           ./config --prefix=/usr/local/openssl11 --openssldir=/usr/local/openssl11 shared
           make -j$(nproc)
           sudo make install
-
           echo "/usr/local/openssl11/lib" | sudo tee /etc/ld.so.conf.d/openssl11.conf
           sudo ldconfig
 
-      # -------------------------------------------------------------------
-      # Dependências de build
-      # -------------------------------------------------------------------
       - name: Install build deps
         run: |
           sudo apt update -y
@@ -49,29 +43,43 @@ jobs:
             libwebp-dev libfreetype6-dev libxslt1-dev libicu-dev wget tar jq \
             libffi-dev libbz2-dev
 
-      # -------------------------------------------------------------------
-      # Download do código-fonte do PHP
-      # -------------------------------------------------------------------
       - name: Download PHP source
         run: |
-          VERSION=${{ github.event.inputs.php_version }}
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.php_version }}"
           SRC="https://www.php.net/distributions/php-${VERSION}.tar.gz"
-          wget -q "$SRC" -O php-${VERSION}.tar.gz || exit 1
-          tar -xzf php-${VERSION}.tar.gz
-          mv php-${VERSION} php-src
+          wget -q "$SRC" -O "php-${VERSION}.tar.gz" || (echo "Falha ao baixar $SRC" && exit 1)
+          tar -xzf "php-${VERSION}.tar.gz"
+          mv "php-${VERSION}" php-src
 
-      # -------------------------------------------------------------------
-      # Configuração universal para qualquer versão PHP
-      # -------------------------------------------------------------------
       - name: Configure PHP
         working-directory: php-src
         run: |
-          VERSION=${{ github.event.inputs.php_version }}
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.php_version }}"
 
           export OPENSSL_CFLAGS="-I/usr/local/openssl11/include"
           export OPENSSL_LIBS="-L/usr/local/openssl11/lib -lssl -lcrypto"
 
           ./buildconf --force || true
+
+          # inicializa flag padrão
+          INTL_FLAG="--enable-intl"
+
+          # desabilita intl para 7.0.x (problemas com ICU muito novo)
+          if [[ "$VERSION" =~ ^7\.0\..*$ ]]; then
+            INTL_FLAG="--disable-intl"
+          fi
+
+          # Algumas versões antigas do 7.x podem exigir ajuste no zip/mcrypt,
+          # mas vamos usar flags genéricas que funcionam na maioria dos casos.
+          EXTRA_FLAGS=""
+
+          # mcrypt era comum em 7.0/7.1 (se o configure falhar, verifica logs)
+          if [[ "$VERSION" =~ ^7\.[01]\. ]]; then
+            # só adiciona se a lib estiver presente; manter como tentativa
+            EXTRA_FLAGS="$EXTRA_FLAGS --with-mcrypt"
+          fi
 
           ./configure \
             --prefix=/opt/php/${VERSION} \
@@ -84,7 +92,7 @@ jobs:
             --enable-opcache \
             --with-readline \
             --with-zip \
-            --enable-intl \
+            $INTL_FLAG \
             --with-xsl \
             --with-sqlite3 \
             --enable-fpm \
@@ -92,39 +100,31 @@ jobs:
             --with-fpm-group=www-data \
             --with-jpeg \
             --with-webp \
-            --with-freetype || cat config.log
+            --with-freetype \
+            $EXTRA_FLAGS || (echo "configure falhou - ver config.log" && cat config.log && exit 1)
 
-      # -------------------------------------------------------------------
-      # Build & Install
-      # -------------------------------------------------------------------
       - name: Build and install
         working-directory: php-src
         run: |
+          set -euo pipefail
           make -j$(nproc)
           sudo make install
 
-      # -------------------------------------------------------------------
-      # Empacota o build
-      # -------------------------------------------------------------------
       - name: Package build
         run: |
-          VERSION=${{ github.event.inputs.php_version }}
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.php_version }}"
           mkdir -p artifacts
           cd /opt/php
           tar -czf "${GITHUB_WORKSPACE}/artifacts/php-${VERSION}-linux-x64.tar.gz" "${VERSION}"
 
-      # -------------------------------------------------------------------
-      # SHA256 e tamanho
-      # -------------------------------------------------------------------
       - name: Compute checksum and size
         run: |
-          ART=artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz
-          echo "sha256=$(sha256sum $ART | awk '{print $1}')" > artifact.meta
-          echo "size=$(stat -c%s $ART)" >> artifact.meta
+          set -euo pipefail
+          ART="artifacts/php-${{ github.event.inputs.php_version }}-linux-x64.tar.gz"
+          echo "sha256=$(sha256sum "$ART" | awk '{print $1}')" > artifact.meta
+          echo "size=$(stat -c%s "$ART")" >> artifact.meta
 
-      # -------------------------------------------------------------------
-      # Cria release no GitHub
-      # -------------------------------------------------------------------
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v1
         with:
@@ -136,12 +136,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # -------------------------------------------------------------------
-      # Atualiza versions.json sem sobrescrever
-      # -------------------------------------------------------------------
       - name: Update versions.json
         run: |
-          VERSION=${{ github.event.inputs.php_version }}
+          set -euo pipefail
+          VERSION="${{ github.event.inputs.php_version }}"
           TAG="php-${VERSION}"
           ASSET="php-${VERSION}-linux-x64.tar.gz"
           URL="https://github.com/${REPO}/releases/download/${TAG}/${ASSET}"
@@ -149,12 +147,10 @@ jobs:
           SHA=$(grep sha256 artifact.meta | cut -d= -f2)
           SIZE=$(grep size artifact.meta | cut -d= -f2)
 
-          # Se não existir versions.json, cria um vazio
           if [ ! -f versions.json ]; then
             echo '{"versions":[]}' > versions.json
           fi
 
-          # Adiciona o novo item ao array existente
           jq \
             --arg v "$VERSION" \
             --arg u "$URL" \
@@ -172,13 +168,10 @@ jobs:
 
           mv versions.tmp versions.json
 
-      # -------------------------------------------------------------------
-      # Commit final do versions.json
-      # -------------------------------------------------------------------
       - name: Commit updated versions.json
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add versions.json
+          git add versions.json || true
           git commit -m "Add PHP ${{ github.event.inputs.php_version }} to versions.json" || true
           git push || true
