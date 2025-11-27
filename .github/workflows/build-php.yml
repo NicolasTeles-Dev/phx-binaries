@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       php_version:
-        description: "PHP version (e.g. 7.0.33, 7.4.33, 8.1.27, 8.3.2)"
+        description: "PHP version (e.g. 7.4.33, 8.1.27, 8.3.2)"
         required: true
         type: string
 
@@ -18,11 +18,14 @@ jobs:
       REPO: ${{ github.repository }}
 
     steps:
+      # -------------------------------------------------------------------
+      # Checkout
+      # -------------------------------------------------------------------
       - name: Checkout
         uses: actions/checkout@v4
 
       # -------------------------------------------------------------------
-      # Build deps
+      # Build dependencies
       # -------------------------------------------------------------------
       - name: Install Build Dependencies
         run: |
@@ -34,7 +37,7 @@ jobs:
             zlib1g-dev libffi-dev libbz2-dev wget tar jq
 
       # -------------------------------------------------------------------
-      # Selecionar OpenSSL correto
+      # Select correct OpenSSL version (PHP <= 8.1 requires OpenSSL 1.1)
       # -------------------------------------------------------------------
       - name: Select OpenSSL version
         id: openssl
@@ -43,8 +46,8 @@ jobs:
           MAJOR=$(echo $VERSION | cut -d. -f1)
           MINOR=$(echo $VERSION | cut -d. -f2)
 
-          if [ "$MAJOR" = "7" ] && [ "$MINOR" -le 2 ]; then
-              echo "Using manual OpenSSL 1.1 for PHP <= 7.2"
+          if { [ "$MAJOR" -eq 7 ] ; } || { [ "$MAJOR" -eq 8 ] && [ "$MINOR" -le 1 ] ; }; then
+              echo "Using OpenSSL 1.1 for PHP <= 8.1"
               wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
               tar -xzf openssl-1.1.1w.tar.gz
               cd openssl-1.1.1w
@@ -55,14 +58,14 @@ jobs:
               sudo ldconfig
               echo "path=/usr/local/openssl11" >> $GITHUB_OUTPUT
           else
-              echo "Using system OpenSSL (1.1 or 3)"
+              echo "Using system OpenSSL 3 for PHP >= 8.2"
               echo "path=/usr" >> $GITHUB_OUTPUT
           fi
 
       # -------------------------------------------------------------------
-      # Baixar fonte oficial do PHP
+      # Download PHP source
       # -------------------------------------------------------------------
-      - name: Download PHP source
+      - name: Download PHP Source
         run: |
           VERSION=${{ github.event.inputs.php_version }}
           URL="https://www.php.net/distributions/php-${VERSION}.tar.gz"
@@ -71,7 +74,7 @@ jobs:
           mv php-* php-src
 
       # -------------------------------------------------------------------
-      # CONFIG & BUILD
+      # Configure
       # -------------------------------------------------------------------
       - name: Configure PHP
         working-directory: php-src
@@ -79,6 +82,7 @@ jobs:
           VERSION=${{ github.event.inputs.php_version }}
           MAJOR=$(echo $VERSION | cut -d. -f1)
           MINOR=$(echo $VERSION | cut -d. -f2)
+
           OPENSSL_PATH="${{ steps.openssl.outputs.path }}"
 
           FLAGS="
@@ -97,8 +101,7 @@ jobs:
             --with-fpm-group=www-data
           "
 
-          # Extensões modernas para PHP >= 7.3
-          if [ "$MAJOR" = "8" ] || { [ "$MAJOR" = "7" ] && [ "$MINOR" -ge 3 ]; }; then
+          if [ "$MAJOR" -eq 8 ] || { [ "$MAJOR" -eq 7 ] && [ "$MINOR" -ge 3 ]; }; then
             FLAGS="$FLAGS
               --with-jpeg
               --with-webp
@@ -111,6 +114,9 @@ jobs:
 
           ./configure $FLAGS || cat config.log
 
+      # -------------------------------------------------------------------
+      # Build
+      # -------------------------------------------------------------------
       - name: Build & Install
         working-directory: php-src
         run: |
@@ -118,7 +124,7 @@ jobs:
           sudo make install
 
       # -------------------------------------------------------------------
-      # PACKAGE
+      # Package
       # -------------------------------------------------------------------
       - name: Package build
         run: |
@@ -137,7 +143,7 @@ jobs:
           echo "size=$(stat -c%s $ART)" >> artifact.meta
 
       # -------------------------------------------------------------------
-      # RELEASE
+      # Release
       # -------------------------------------------------------------------
       - name: Create Release
         uses: softprops/action-gh-release@v1
@@ -151,7 +157,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # -------------------------------------------------------------------
-      # Atualizar versions.json
+      # Update versions.json
       # -------------------------------------------------------------------
       - name: Update versions.json
         run: |
