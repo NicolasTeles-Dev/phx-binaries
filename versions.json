@@ -40,13 +40,5 @@
       "sha256": "eeb305c7d563e20d243e35dda6f205afe91ab02f11c6cfeefb6eb220b3d8d139",
       "size_bytes": 84655628
     },
-    {
-      "version": "8.1.2",
-      "url": "https://github.com/NicolasTeles-Dev/phx-binaries/releases/download/php-8.1.2/php-8.1.2-linux-x64.tar.gz",
-      "arch": "x64",
-      "os": "linux",
-      "sha256": "c860eba126c3480ef9a315e5d5e2022c1e5a025cdbfeebeb257a70aedb97c3be",
-      "size_bytes": 65716402
-    }
   ]
 }
